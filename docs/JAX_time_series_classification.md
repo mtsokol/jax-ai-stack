@@ -15,28 +15,35 @@ kernelspec:
 # Time series classification with JAX
 
 In this tutorial, we're going to perform time series classification with a Convolutional Neural Network.
-We're going to use FordA dataset from the [UCR archive](https://www.cs.ucr.edu/%7Eeamonn/time_series_data_2018/).
+We will use the FordA dataset from the [UCR archive](https://www.cs.ucr.edu/%7Eeamonn/time_series_data_2018/),
+which contains measurements of engine noise captured by a motor sensor.
 
-The problem we're facing is to assess if an engine is malfunctioning based on recorded noises it generates.
-Each sample is comprised of noise measurements across time, together with a "yes/no" label, so it's a binary classification problem.
+We need to assess if an engine is malfunctioning based on the recorded noises it generates.
+Each sample comprises of noise measurements across time, together with a "yes/no" label,
+so this is a binary classification problem.
 
-Although convolution models are mainly associated with image processing, they are useful also for time series data as they're able to extract temporal structures.
+Although convolution models are mainly associated with image processing, they are also useful
+for time series data because they can extract temporal structures.
+
++++
+
+## Tools overview and setup
+
+Here's a list of key packages that belong to the JAX AI stack required for this tutorial:
+
+- [JAX](https://github.com/jax-ml/jax) for array computations.
+- [Flax](https://github.com/google/flax) for constructing neural networks.
+- [Optax](https://github.com/google-deepmind/optax) for gradient processing and optimization.
+- [Grain](https://github.com/google/grain/) to define data sources.
+- [tqdm](https://tqdm.github.io/) for a progress bar to monitor the training progress.
+
+We'll start by installing and importing these packages.
 
 ```{code-cell} ipython3
 # Required packages
 # !pip install -U jax flax optax
 # !pip install -U grain tqdm requests matplotlib
 ```
-
-## Tools overview
-
-Here's a list of key packages that belong to JAX AI stack:
-
-- [JAX](https://github.com/jax-ml/jax) will be used for array computations.
-- [Flax](https://github.com/google/flax) for constructing neural networks.
-- [Optax](https://github.com/google-deepmind/optax) for gradient processing and optimization.
-- [Grain](https://github.com/google/grain/) will be be used to define data sources.
-- [tqdm](https://tqdm.github.io/) for a progress bar to monitor the training progress.
 
 ```{code-cell} ipython3
 import jax
@@ -50,10 +57,10 @@ import grain.python as grain
 import tqdm
 ```
 
-## Dataset
+## Load the dataset
 
-We load dataset files into NumPy arrays, add singleton dimention to take into
-the account convolution features, and change `-1` label to `0` value:
+We load dataset files into NumPy arrays, add singleton dimension to take convolution features
+into account, and change `-1` label to `0` (so that the expected values are `0` and `1`):
 
 ```{code-cell} ipython3
 def prepare_ucr_dataset() -> tuple:
@@ -83,8 +90,9 @@ def prepare_ucr_dataset() -> tuple:
 (x_train, y_train), (x_test, y_test) = prepare_ucr_dataset()
 ```
 
+Let's visualize example samples from each class.
+
 ```{code-cell} ipython3
-# Here are exemplary samples from each class
 classes = np.unique(np.concatenate((y_train, y_test), axis=0))
 for c in classes:
     c_x_train = x_train[y_train == c]
@@ -93,13 +101,17 @@ plt.legend()
 plt.show()
 ```
 
-For handling input data we're going to use Grain, a pure Python package developed
-for JAX and Flax models. Grain supports custom setups where data sources might come
-in different forms, but they all need to implement the `grain.RandomAccessDataSource`
+### Create a Data Loader using Grain
+
+For handling input data we're going to use Grain, a pure Python package developed for JAX and
+Flax models.
+
+Grain follows the source-sampler-loader paradigm. Grain supports custom setups where data sources
+might come in different forms, but they all need to implement the `grain.RandomAccessDataSource`
 interface. See [PyGrain Data Sources](https://github.com/google/grain/blob/main/docs/data_sources.md)
 for more details.
 
-Our dataset is comprised of relatively small NumPy arrays so our DataSource is uncomplicated:
+Our dataset is comprised of relatively small NumPy arrays so our `DataSource` is uncomplicated:
 
 ```{code-cell} ipython3
 class DataSource(grain.RandomAccessDataSource):
@@ -118,6 +130,13 @@ class DataSource(grain.RandomAccessDataSource):
 train_source = DataSource(x_train, y_train)
 test_source = DataSource(x_test, y_test)
 ```
+
+Samplers determine the order in which records are processed, and we'll use the
+[`IndexSmapler`](https://github.com/google/grain/blob/main/docs/data_loader/samplers.md#index-sampler)
+recommended by Grain.
+
+Finally, we'll create `DataLoader`s that handle orchestration of loading.
+We'll leverage Grain's multiprocessing capabilities to scale processing up to 4 workers.
 
 ```{code-cell} ipython3
 seed = 12
@@ -162,10 +181,13 @@ test_loader = grain.DataLoader(
 )
 ```
 
-## Model
+## Define the Model
 
-Here we construct the model with three convolution and dense layers. We use ReLU activation
-function for middle layers and softmax in the final layer for binary classification output:
+Let's now construct the Convolutional Neural Network with Flax by subclassing `nnx.Module`.
+You can learn more about the [Flax NNX module system in the Flax documentation](https://flax.readthedocs.io/en/latest/nnx_basics.html#the-flax-nnx-module-system).
+
+Let's have three convolution and dense layers, and use ReLU activation function for middle
+layers and softmax in the final layer for binary classification output.
 
 ```{code-cell} ipython3
 class MyModel(nnx.Module):
@@ -211,11 +233,15 @@ model = MyModel(rngs=nnx.Rngs(0))
 nnx.display(model)
 ```
 
-## Training
+## Train the Model
 
-To train our model we construct an `nnx.Optimizer` object with our model and a selected
-optimization algorithm. We're going to use Adam optimizer, which is a popular choice
-for Deep Learning models:
+To train our Flax model we need to construct an `nnx.Optimizer` object with our model and
+a selected optimization algorithm. The optimizer object manages the model’s parameters and
+applies gradients during training.
+
+We're going to use [Adam optimizer](https://optax.readthedocs.io/en/latest/api/optimizers.html#adam),
+a popular choice for Deep Learning models. We'll use it through
+[Optax](https://optax.readthedocs.io/en/latest/index.html), an optimization library developed for JAX.
 
 ```{code-cell} ipython3
 num_epochs = 300
@@ -224,6 +250,9 @@ momentum = 0.9
 
 optimizer = nnx.Optimizer(model, optax.adam(learning_rate, momentum))
 ```
+
+We'll define a loss and logits computation function using Optax's
+[`losses.softmax_cross_entropy_with_integer_labels`](https://optax.readthedocs.io/en/latest/api/losses.html#optax.losses.softmax_cross_entropy_with_integer_labels).
 
 ```{code-cell} ipython3
 def compute_losses_and_logits(model: nnx.Module, batch_tokens: jax.Array, labels: jax.Array):
@@ -234,6 +263,15 @@ def compute_losses_and_logits(model: nnx.Module, batch_tokens: jax.Array, labels
     ).mean()
     return loss, logits
 ```
+
+We'll now define the training and evaluation step functions. The loss and logits from both
+functions will be used for calculating accuracy metrics.
+
+For training, we'll use `nnx.value_and_grad` to compute the gradients, and then update
+the model’s parameters using our optimizer.
+
+Notice the use of [`nnx.jit`](https://flax.readthedocs.io/en/latest/api_reference/flax.nnx/transforms.html#flax.nnx.jit). This sets up the functions for just-in-time (JIT) compilation with [XLA](https://openxla.org/xla)
+for performant execution across different hardware accelerators like GPUs and TPUs.
 
 ```{code-cell} ipython3
 @nnx.jit
@@ -281,6 +319,9 @@ eval_metrics_history = {
 }
 ```
 
+We can now train the CNN model. We'll evaluate the model’s performance on the test set
+after each epoch, and print the metrics: total loss and accuracy.
+
 ```{code-cell} ipython3
 bar_format = "{desc}[{n_fmt}/{total_fmt}]{postfix} [{elapsed}<{remaining}]"
 train_total_steps = len(x_train) // train_batch_size
@@ -324,6 +365,8 @@ for epoch in range(num_epochs):
     evaluate_model(epoch)
 ```
 
+Finally, let's visualize the loss and accuracy with Matplotlib.
+
 ```{code-cell} ipython3
 plt.plot(train_metrics_history["train_loss"], label="Loss value during the training")
 plt.legend()
@@ -342,5 +385,5 @@ that the loss function isn't completely flat yet. We could continue until the cu
 but we also need to pay attention to validation accuracy so as to spot when the model starts
 overfitting.
 
-For model early stopping and selecting best model there's [Orbax](https://github.com/google/orbax)
-library which provides checkpointing and persistence utilities.
+For model early stopping and selecting best model, you can check out [Orbax](https://github.com/google/orbax),
+a library which provides checkpointing and persistence utilities.
